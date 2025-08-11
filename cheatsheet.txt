@@ -1,0 +1,226 @@
+Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH*'
+
+# Install the OpenSSH Client
+Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
+
+# Install the OpenSSH Server
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+
+
+Get-Service -Name sshd
+
+Get-Process -Name sshd
+
+Start-Service sshd
+
+Set-Service -Name sshd -StartupType 'Automatic'
+
+if (!(Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue | Select-Object Name, Enabled)) {
+    Write-Output "Firewall Rule 'OpenSSH-Server-In-TCP' does not exist, creating it..."
+    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+} else {
+    Write-Output "Firewall rule 'OpenSSH-Server-In-TCP' has been created and exists."
+}
+
+###################################
+
+function prompt {
+    "PS> "
+}
+
+.\Configure-Keycloak.ps1 -Environment Production -DatabaseUser postgres -KeycloakZipPath .\keycloak.zip -CertificateFilePath (Join-Path $PWD cert.pem) -CertificateKeyFilePath (Join-Path $PWD key.pem)
+
+New-SelfSignedCertificate -DnsName "yourdomain.com" -CertStoreLocation "Cert:\LocalMachine\My"
+
+$certname = "RemoveThisCert"
+$cert = Import-Certificate -FilePath "cert.pem" -CertStoreLocation "Cert:\LocalMachine\Root"
+$cert.FriendlyName = $certname
+
+$certpath = Get-ChildItem -Path "Cert:\LocalMachine\Root" | Where-Object { $_.FriendlyName -eq $certname }
+Remove-Item -Path $certpath.PSPath -Force
+
+
+Write-Log "Stopping Keycloak process..." "DEBUG"
+Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+Wait-Process -Id $process.Id -ErrorAction SilentlyContinue
+Write-Log "Stopped Keycloak process: $($process.Id)" "DEBUG"
+Get-WmiObject Win32_Process | Where-Object {$_.ParentProcessId -eq $process.Id} | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    Wait-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+    Write-Log "Stopped orphan Keycloak process: $($_.ProcessId)" "DEBUG"
+}
+
+# Getting port stats
+Get-NetTCPConnection | Where-Object { $_.LocalPort -eq $Port}
+
+Write-Log "Checking for existing Keycloak service..." "DEBUG"
+        $existingService = "${script:nssmBinaryPath} status ${ServiceName}" | InvokeExpression -ErrorAction SilentlyContinue | Out-Null
+        if ($existingService) {
+            Write-Log "Found existing Keycloak service: $ServiceName" "DEBUG"
+            "${script:nssmBinaryPath} stop ${ServiceName}" | InvokeExpression -ErrorAction SilentlyContinue | Out-Null
+            "${script:nssmBinaryPath} remove ${ServiceName}" | InvokeExpression -ErrorAction SilentlyContinue | Out-Null
+            Write-Log "Existing Keycloak service stopped and removed" "DEBUG"
+            Start-Sleep -Seconds 3
+        }
+
+function Install-Certifacate {
+    Write-Log "Installing SSL certificate..." "INFO"
+    
+    try {
+        if (-not $CertificateFilePath -or -not (Test-Path $CertificateFilePath)) {
+            Write-Log "SSL certificate file not found or not provided: $CertificateFilePath" "ERROR"
+            return $false
+        }
+        
+        if (-not $CertificateKeyFilePath -or -not (Test-Path $CertificateKeyFilePath)) {
+            Write-Log "SSL certificate key file not found or not provided: $CertificateKeyFilePath" "ERROR"
+            return $false
+        }
+        
+        # Import the certificate
+        $cert = Import-Certificate -FilePath $CertificateFilePath -CertStoreLocation "Cert:\LocalMachine\My"
+        Write-Log "SSL certificate imported successfully: $($cert.Thumbprint)" "SUCCESS"
+        
+        # Import the key
+        $keyContent = Get-Content -Path $CertificateKeyFilePath -Raw
+        $key = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
+        $key.Import([System.Text.Encoding]::UTF8.GetBytes($keyContent))
+        
+        # Associate the key with the certificate
+        $cert.PrivateKey = $key.PrivateKey
+        
+        Write-Log "SSL certificate key associated successfully" "SUCCESS"
+        
+        return $true
+    }
+    catch {
+        Write-Log "Failed to install SSL certificate: $($_.Exception.Message)" "ERROR"
+        return $false
+    }
+}
+
+function Delete-Certificate {
+    Write-Log "Deleting SSL certificate..." "INFO"
+    
+    try {
+        if (-not $CertificateFilePath -or -not (Test-Path $CertificateFilePath)) {
+            Write-Log "SSL certificate file not found or not provided: $CertificateFilePath" "ERROR"
+            return $false
+        }
+        
+        # Remove the certificate from the store
+        $cert = Get-ChildItem -Path "Cert:\LocalMachine\My" | Where-Object { $_.Subject -like "*$($CertificateFilePath)*" }
+        if ($cert) {
+            Remove-Item -Path $cert.PSPath -Force
+            Write-Log "SSL certificate removed successfully: $($cert.Thumbprint)" "SUCCESS"
+            return $true
+        } else {
+            Write-Log "SSL certificate not found in store" "WARN"
+            return $false
+        }
+    }
+    catch {
+        Write-Log "Failed to delete SSL certificate: $($_.Exception.Message)" "ERROR"
+        return $false
+    }
+}
+
+# Winrm
+Enable-PSRemoting
+Test-WSMan -ComputerName 3.217.238.130 -Port 5985
+
+winrm help config
+winrm enumerate winrm/config/listener
+winrm get winrm/config
+winrm quickconfig OR Enable-PSRemoting
+winrm quickconfig -transport:https
+
+winrm set winrm/config/client/auth '@{Basic="true"}'
+winrm set winrm/config/service/auth '@{Basic="true"}'
+winrm set winrm/config/service '@{AllowUnencrypted="true"}'
+
+Get-Item WSMan:\localhost\Client\TrustedHosts
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value 'CHA1BUILD1'
+
+# Troubleshooting
+Test-Connection 'CHA1BUILD1'
+Test-NetConnection aw_2025_02 -TraceRoute
+Get-NetFirewallProfile
+Get-NetConnectionProfile
+Test-NetConnection -ComputerName remote-server -Port 3389
+Get-ChildItem WSMan:\localhost
+Get-NetFirewallRule
+Get-Service WinRM
+
+winrm get winrm/config/listener?Address=*+Transport=HTTP
+
+
+ Get-ChildItem HKLM:\Software\Classes -ErrorAction SilentlyContinue |
+>> Where-Object { $_.PSChildName -match '^\w+\.\w+(\.\d+)?$' -and (Test-Path -Path "$($_.PSPath)\CLSID") } |
+>> Select-Object -ExpandProperty PSChildName |Where-Object {$_ -like 'ISWiAuto30*'}
+
+# how to modify registry
+https://www.convert-in.com/docs/misc/32bit-com-64bit-system
+
+$m_ISWiProj = new-object -comobject ISWiAuto31.ISWiProject # Adjust version as needed
+$strFile = "C:\MyInstallShieldProject\NewProject.ism"
+$m_ISWiProj.CreateProject($strFile,1) # 1 for Basic MSI project
+$m_ISWiProj.SaveProject()
+$m_ISWiProj.CloseProject()
+
+
+Get-NetFirewallPortFilter |
+    Where-Object { $_.LocalPort -eq 5353 } |
+    Get-NetFirewallRule
+
+
+# Elavation (passwordless sudo for windows)
+Method 1: Using Local Group Policy Editor (gpedit.msc)
+Open the Local Group Policy Editor by typing gpedit.msc in the Run dialog (Windows Key + R) and pressing Enter.
+Navigate to: Computer Configuration > Windows Settings > Security Settings > Local Policies > Security Options. 
+Locate the policy: User Account Control: Behavior of the elevation prompt for administrators in Admin Approval Mode. 
+Double-click this policy and change its setting to Elevate without prompting.
+Click Apply and OK.
+
+Install-WindowsFeature -Name Web-Server -IncludeManagementTools
+
+# Example: Silent installation of SQL Server Express with Mixed Mode Authentication
+    # Replace 'YourStrongPassword' with a secure password
+    # Adjust paths and feature names as needed for your specific SQL Server Express version
+
+    $installerPath = "C:\Path\To\SQLEXPR_x64_ENU.exe" # Adjust this path
+    $installDirectory = "C:\Program Files\Microsoft SQL Server" # Default or custom path
+    $instanceName = "SQLEXPRESS" # Default instance name for Express
+
+    Start-Process -FilePath $installerPath -ArgumentList "/QS /ACTION=Install /FEATURES=SQLEngine,Tools /INSTANCENAME=$instanceName /SQLSYSADMINACCOUNTS=""BUILTIN\Administrators"" /AGTSVCACCOUNT=""NT AUTHORITY\NETWORK SERVICE"" /IACCEPTSQLSERVERLICENSETERMS /SQLCOLLATION=""SQL_Latin1_General_CP1_CI_AS"" /BROWSERSVCSTARTUPTYPE=Automatic /SECURITYMODE=SQL /SAPWD=""YourStrongPassword"" /INSTALLSHAREDDIR=""$installDirectory\Shared"" /INSTALLSHAREDWOWDIR=""$installDirectory\Shared_WOW"" /INSTALLSQLDATADIR=""$installDirectory\MSSQL16.$instanceName\MSSQL\Data""" -Wait -NoNewWindow
+2. Using PowerShell Desired State Configuration (DSC):
+Install the SqlServerDsc Module: This module provides DSC resources for managing SQL Server.
+Code
+
+    Install-Module -Name SqlServerDsc -Scope AllUsers
+Create a Configuration Script:
+.
+Define a DSC configuration that specifies the desired state of your SQL Server Express installation, including features, instance name, and settings.
+Compile and Apply the Configuration:
+.
+Generate a Managed Object Format (MOF) file from your configuration and apply it to the target machine.
+3. Utilizing Community-Developed PowerShell Scripts:
+Explore the PowerShell Gallery or GitHub:
+Search for pre-built PowerShell scripts designed for SQL Server Express installations. These often provide more comprehensive automation, including dependency checks and error handling.
+Review and Customize:
+Before using any external script, thoroughly review its code to understand its functionality and customize it to meet your specific requirements.
+Important Considerations:
+Run PowerShell as Administrator:
+Always execute PowerShell scripts for SQL Server installation with administrative privileges.
+Prerequisites:
+Ensure that necessary prerequisites, such as .NET Framework, are installed on the target system.
+Security:
+Use strong, unique passwords for SQL Server accounts, especially the SA account if using Mixed Mode Authentication.
+Error Handling and Logging:
+Implement robust error handling and logging in your scripts to troubleshoot potential issues during the installation process.
+
+
+# Get host and port of SQL Server
+SELECT DISTINCT local_net_address, local_tcp_port
+FROM sys.dm_exec_connections
+WHERE local_net_address IS NOT NULL AND local_tcp_port IS NOT NULL;
