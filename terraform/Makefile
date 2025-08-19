@@ -1,5 +1,9 @@
-
+DOCKER_IMG := terraform-dev
 CURR_AMI := "ami=ami-00583753a2de7e452"
+
+.PHONY: image
+image:
+	docker build -t $(DOCKER_IMG) .
 
 .PHONY: init
 init:
