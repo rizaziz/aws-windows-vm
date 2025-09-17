@@ -1,0 +1,101 @@
+---
+- name: Configure Linux Satellite
+  hosts: all
+  gather_facts: yes
+  tasks:
+    - name: Update yum repositories
+      ansible.builtin.command: yum update -yy
+      become: true
+
+    - name: Create a user
+      ansible.builtin.shell: |
+        groupadd --gid 1005 admin
+        useradd --uid 1005 --gid 1005 --shell /bin/bash --create-home admin
+        echo "%admin ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/admin
+        echo admin | passwd --stdin admin
+      become: true
+      tags:
+        - user
+
+    - name: Create swap file
+      ansible.builtin.command: dd if=/dev/zero of=/swapfile bs=1024 count=4194304
+      become: true
+
+    - name: Create swap
+      ansible.builtin.command: mkswap /swapfile
+      become: true
+
+    - name: Swapfile chmod
+      ansible.builtin.command: chmod 0600 /swapfile
+      become: true
+
+    - name: Remove swap to fstab
+      ansible.builtin.command: sed -i '/swapfile none swap defaults 0 0/d' /etc/fstab
+      become: true
+      tags:
+        - fstab
+
+    - name: Add swap to fstab
+      ansible.builtin.command: sed -i '$a /swapfile none swap defaults 0 0' /etc/fstab
+      become: true
+      tags:
+        - fstab
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon-reload: true
+      become: true
+      tags:
+        - fstab
+
+    - name: Set hostname
+      ansible.builtin.command: hostnamectl hostname satellite.aws.rizaziz.com
+      become: true
+      tags:
+        - hostname
+
+    - name: Swap on
+      ansible.builtin.command: swapon /swapfile
+      become: true
+
+    - name: Register RHEL withsubscription-manager
+      ansible.builtin.command: subscription-manager register --username rizaziz2002 --password jbz3vkd1ctb_erh8EBT --force
+      become: true
+    
+    - name: Manage repos by subscription-manager
+      ansible.builtin.command: subscription-manager config --rhsm.manage_repos=1
+      become: true
+
+    - name: Disable all repos
+      ansible.builtin.command: subscription-manager repos --disable "*"
+      become: true
+
+    - name: Enable Satellite repos
+      ansible.builtin.command: subscription-manager repos --enable=rhel-9-for-x86_64-baseos-rpms --enable=rhel-9-for-x86_64-appstream-rpms --enable=satellite-6.17-for-rhel-9-x86_64-rpms --enable=satellite-maintenance-6.17-for-rhel-9-x86_64-rpms
+      become: true
+    
+    - name: Update dnf repos
+      ansible.builtin.command: dnf update -y
+      become: true
+
+    - name: Install dns utils
+      ansible.builtin.dnf:
+        name: dnsutils
+        state: present
+      become: true
+      tags:
+       - dns
+
+    - name: Install satellite
+      ansible.builtin.dnf:
+        name: satellite
+        state: present
+      become: true
+      tags:
+        - satellite
+
+    - name: Configure satellite
+      ansible.builtin.command: satellite-installer --scenario satellite
+      become: true
+
+    

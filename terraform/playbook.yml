@@ -1,0 +1,62 @@
+---
+- name: Configure GUI
+  hosts: all
+  gather_facts: yes
+  tasks:
+  - name: Update yum repositories
+    ansible.builtin.command: yum update -yy
+    become: true
+  
+  - name: Install Graphical Interface
+    ansible.builtin.command: yum groupinstall "Server with GUI" -y
+    become: true
+
+  - name: Install epel release
+    ansible.builtin.command: dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+    become: true
+
+  - name: Install rdp and vnc
+    ansible.builtin.command: dnf install -y xrdp tigervnc-server
+    become: true
+
+  - name: Ensure xrdp service is running
+    ansible.builtin.systemd_service:
+      name: xrdp
+      state: started
+      enabled: yes
+    become: true
+
+  - name: Ensure firewalld is running
+    ansible.builtin.systemd_service:
+      name: firewalld
+      state: started
+      enabled: yes
+    become: true
+
+  - name: Open port 3389
+    ansible.posix.firewalld:
+      port: 3389/tcp
+      permanent: true
+      immediate: true
+      state: enabled
+    become: true
+
+  - name: Set systemd default target
+    ansible.builtin.command: systemctl set-default graphical.target
+    become: true
+
+  - name: Isolate default target
+    ansible.builtin.command: systemctl isolate default
+    become: true
+
+  - name: Create a user
+    ansible.builtin.shell: |
+      groupadd --gid 1005 admin
+      useradd --uid 1005 --gid 1005 --shell /bin/bash --create-home admin
+      echo "%admin ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/admin
+      echo admin | passwd --stdin admin
+    become: true
+    tags:
+      - user
+
+

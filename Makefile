@@ -1,5 +1,7 @@
 DOCKER_IMG := dev-container
-DOCKER_HOME_BIN_VOLUME := $(DOCKER_IMG)-home-bin
+DOCKER_ADM_USER := admin
+DOCKER_HOME := /home/$(DOCKER_ADM_USER)
+DATA_VOLUME := dev-container-data
 
 
 .PHONY: image
@@ -11,18 +13,34 @@ image:
 		--build-arg GRP_ID=$(shell id -g) \
 		--build-arg GRP_NAME=$(shell id -gn) \
 		--build-arg DOCKER_GRP_ID=$(shell getent group docker | cut -d: -f3) \
+		--build-arg ADM_USR_NAME=$(DOCKER_ADM_USER) \
 		.
 
 .PHONY: vols
 vols:
 	@echo "Creating docker volumes"
-	docker volume create $(DOCKER_HOME_BIN_VOLUME)
+	docker volume create $(DATA_VOLUME)
+	
 
 .PHONY: shell
 shell:
-	docker run --rm -ti --group-add docker \
+	docker run --rm -ti \
 		-v $(CURDIR):$(CURDIR) \
 		-v /var/run/docker.sock:/var/run/docker.sock \
-		-v dev-container-home-bin:/home/$(shell id -gn) \
-		-w $(CURDIR) --name $(DOCKER_IMG) \
+		-v $(DATA_VOLUME):$(DOCKER_HOME) \
+		-v $(shell echo ~/Downloads):$(shell echo ~/Downloads) \
+		-w $(CURDIR) \
 		$(DOCKER_IMG) bash
+
+.PHONY: prune
+prune:
+	docker volume rm --force $(DATA_VOLUME)
+	$(MAKE) vols
+
+
+.PHONY: pyenv
+pyenv:
+	docker run --rm -ti \
+		-v $(DATA_VOLUME):$(DOCKER_HOME) \
+		-v $(CURDIR)/pyenv.sh:/pyenv.sh \
+		$(DOCKER_IMG) /pyenv.sh

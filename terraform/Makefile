@@ -1,5 +1,6 @@
 DOCKER_IMG := terraform-dev
-CURR_AMI := "ami=ami-00583753a2de7e452"
+CURR_AMI := "ami=ami-0dfc569a8686b9320" #"ami=ami-0bbdd8c17ed981ef9" #"ami=ami-0b0012dad04fbe3d7" #"ami=ami-0dfc569a8686b9320" #"ami=ami-0fd3ac4abb734302a" #"ami=ami-00f1cb0e129bb040e" #"ami=ami-06cb8f36f00a2b90c"  # "ami=ami-02b60b5095d1e5227"
+VM_NAME := rhel9
 
 .PHONY: image
 image:
@@ -19,7 +20,7 @@ lint:
 .PHONY: plan
 plan:
 	@echo "Planning Terraform changes..."
-	terraform plan -var="whitelisted_ip=$(shell curl -s -4 ifconfig.me)/32" -var="vm-state=running" -var=$(CURR_AMI) -out=tfplan
+	terraform plan -var="whitelisted_ip=$(shell curl -s -4 ifconfig.me)/32" -var="vm-state=running" -var=$(CURR_AMI) -var=vm_name=$(VM_NAME) -out=tfplan
 
 .PHONY: apply
 apply:
@@ -30,7 +31,7 @@ apply:
 .PHONY: taint
 taint:
 	@echo "Tainting the virtual machine..."
-	terraform taint aws_instance.dev
+	terraform taint aws_instance.rhel[0]
 	$(MAKE) plan
 	$(MAKE) apply
 
@@ -55,17 +56,12 @@ rdp:
 .PHONY: ssh
 ssh:
 	@echo "Connecting to the virtual machine via SSH..."
-	@cp win_key ~/.ssh/win_key
-	@chmod 600 ~/.ssh/win_key
+	$(shell if [ ! -d "~/.ssh" ]; then mkdir ~/.ssh 2>/dev/null; fi)
+	@cp id_rsa ~/.ssh/id_rsa
+	@chmod 600 ~/.ssh/id_rsa
 	@cp config ~/.ssh/config
-	@ssh win
+	@ssh $(VM_NAME)
 
-
-# C:\Users\Aziz Rizayev\Workspace\mot.OS-UI\install-scripts\motosui\Product Configuration 1\Release 1\MsixPackage\motosui
-.PHONY: scp
-scp:
-	@echo "Copying files to the virtual machine via SCP..."
-	scp "$(shell realpath "$(shell pwd)/../../repos/mot.OS-UI/install-scripts/install-scripts.zip")" win:C:\
 
 .PHONY: vm-on
 vm-on: plan apply
@@ -74,7 +70,7 @@ vm-on: plan apply
 .PHONY:	vm-off
 vm-off: 
 	@echo "Stopping virtual machine..."
-	terraform apply -var="vm-state=stopped" -var=$(CURR_AMI) -auto-approve
+	terraform apply -var="vm-state=stopped" -var=$(CURR_AMI) -var=vm_name=$(VM_NAME) -auto-approve
 
 .PHONY: list-win-images
 list-win-images:
@@ -83,6 +79,15 @@ list-win-images:
 		--owners amazon \
 		--filters "Name=platform,Values=windows" "Name=name,Values=Windows_Server-2025-English-*-*-*" \
 		--query "Images[*].[ImageId,Name,PlatformDetails]" \
+		--output table
+
+.PHONY: list-rhel-images
+list-rhel-images:
+	aws ec2 describe-images \
+		--region=us-east-1 \
+		--owners amazon \
+		--filters "Name=platform-details,Values=Red Hat Enterprise Linux" "Name=architecture,Values=x86_64" "Name=name,Values=RHEL-9*HVM-2025*" \
+		--query "Images[*].[ImageId,Name,PlatformDetails,Architecture]" \
 		--output table
 
 .PHONY: list-linux-images
